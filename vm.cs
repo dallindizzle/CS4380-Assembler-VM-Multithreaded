@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -15,7 +15,7 @@ namespace CS4380_Project4
         public int code;
         bool codeSet;
         public byte[] mem;
-        string[] instSym = new string[] { "ADD", "ADI", "SUB", "MUL", "DIV", "AND", "OR", "CMP", "TRP", "MOV", "LDA", "STR", "LDR", "LDB", "JMP", "JMR", "BRZ", "BNZ", "BGT", "STB", "BLT" };
+        string[] instSym = new string[] { "ADD", "ADI", "SUB", "MUL", "DIV", "AND", "OR", "CMP", "TRP", "MOV", "LDA", "STR", "LDR", "LDB", "JMP", "JMR", "BRZ", "BNZ", "BGT", "STB", "BLT", "LCK", "ULK", "END", "BLK", "RUN"};
         string[] regSym = new string[] { "PC", "SL", "SP", "FP", "SB" };
 
         public Assembler(int size)
@@ -41,6 +41,19 @@ namespace CS4380_Project4
                 var tokens = line.Split('#')[0].Trim().Split(' ');
 
                 tokens = tokens.Where(x => !string.IsNullOrEmpty(x)).ToArray();
+
+                if (tokens[0] == "BLK" || tokens[0] == "END" || tokens[1] == "BLK" || tokens[1] == "END")
+                {
+                    if (tokens.Length > 1)
+                    {
+                        if (tokens[1] == "END" || tokens[1] == "BLK")
+                        {
+                            symbols.Add(tokens[0], PC);
+                        }
+                    }
+                    PC += 12;
+                    continue;
+                }
 
                 // Check if line is a Directive by checking the length of the line and checking if it has an operation at the begining
                 if (tokens.Length <= 3 && (!instSym.Contains(tokens[0])) && (!instSym.Contains(tokens[1])))
@@ -85,6 +98,22 @@ namespace CS4380_Project4
                 var tokens = line.Split('#')[0].Trim().Split(' ');
 
                 tokens = tokens.Where(x => !string.IsNullOrEmpty(x)).ToArray();
+
+                if (tokens[0] == "BLK" || tokens[0] == "END" || tokens[1] == "BLK" || tokens[1] == "END")
+                {
+                    byte[] inst;
+
+                    if (tokens[0] == "BLK" || tokens[0] == "END")
+                    {
+                        inst = CreateInstruction(tokens[0], "", "");
+                    } else
+                    {
+                        inst = CreateInstruction(tokens[1], "", "");
+                    }
+                    InsertMem(inst, PC);
+                    PC += 12;
+                    continue;
+                }
 
                 if (tokens.Length <= 3 && (!instSym.Contains(tokens[0])) && (!instSym.Contains(tokens[1])))
                 {
@@ -251,6 +280,37 @@ namespace CS4380_Project4
                 case "CMP":
                     opInt = 20;
                     break;
+
+                case "RUN":
+                    opInt = 26;
+                    break;
+
+                case "END":
+                    opInt = 27;
+                    break;
+
+                case "BLK":
+                    opInt = 28;
+                    break;
+
+                case "LCK":
+                    opInt = 29;
+                    break;
+
+                case "ULK":
+                    opInt = 30;
+                    break;
+            }
+
+            if (opInt == 27 || opInt == 28)
+            {
+                op1Int = 0;
+                op2Int = 0;
+
+                var m = BitConverter.GetBytes(opInt);
+                byte[] mbytes = new byte[12];
+                m.CopyTo(mbytes, 0);
+                return mbytes;
             }
 
             // If the op is a TRP then we do this different thing here
@@ -264,7 +324,7 @@ namespace CS4380_Project4
                 t1.CopyTo(tBytes, 4);
                 return tBytes;
             }
-            else if (opInt == 1 || opInt == 2)
+            else if (opInt == 1 || opInt == 2 || opInt == 29 || opInt == 30)
             {
                 if (op1[0] == 'R') op1Int = (int)char.GetNumericValue(op1[1]);
                 else if (op1 == "PC")
@@ -341,38 +401,67 @@ namespace CS4380_Project4
 
             string file = "proj4.asm";
 
-            Assembler assembler = new Assembler(10000);
+            Assembler assembler = new Assembler(100000);
             assembler.PassOne(file);
             assembler.PassTwo(file);
             //assembler.PassOne(args[0]);
             //assembler.PassTwo(args[0]);
 
             VM vm = new VM(assembler.code, assembler.PC, assembler.SIZE, assembler.mem);
-            vm.Run();
+            try
+            {
+                vm.Run();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+            }
             Console.ReadKey();
         }
 
         int[] reg;
         byte[] mem;
+        int memSize;
+        bool[] threads;
+        int curThread;
+        int threadSize;
+        bool blk;
 
         VM(int startIndex, int stackLimit, int size, byte[] memory)
         {
             reg = new int[13];
 
+            memSize = size - 4;
+
+            threads = new bool[5];
+
+            for (int i = 1; i < threads.Length; i++)
+            {
+                threads[i] = false;
+            }
+
+            curThread = 0;
+
+            threads[0] = true; // this is our MAIN THREAD
+
+            threadSize = 10000;
+
+            blk = false; // If this is true, then the main thread will be blocked from running until other threads are done.
+
             // Register 8 will be the PC register
             reg[8] = startIndex;
 
             // Register 9 is the Stack Limit register
-            reg[9] = stackLimit;
+            reg[9] = memSize - (threadSize * curThread) - threadSize;
 
             // Register 10 will be the the Stack Pointer which will point at the top of the stack. Right now there is nothing on the top of the stack so this points to the "bottom"
-            reg[10] = size - 4;
+            reg[10] = size - 56;
 
-            // Register 11 is the Frame Pointer which points to the bottom of the current frame. This register is not initialized right now because there are no frames on the stack
-            reg[11] = size - 4;
+            // Register 11 is the Frame Pointer which points to the bottom of the current frame
+            reg[11] = size - 56;
 
             //Register 12 will be the Stack "Bottom"
-            reg[12] = size - 4;
+            reg[12] = size - 56;
             mem = memory;
         }
 
@@ -479,8 +568,28 @@ namespace CS4380_Project4
                     case 25:
                         LDBadd(inst);
                         break;
-                }
 
+                    case 26:
+                        RUN(inst);
+                        continue;
+
+                    case 27:
+                        END(inst);
+                        break;
+
+                    case 28:
+                        BLK(inst);
+                        break;
+
+                    case 29:
+                        LCK(inst);
+                        break;
+
+                    case 30:
+                        ULK(inst);
+                        break;
+                }
+                threadSwitch(); // We thread switch here because we are doing Round Robin where we run 1 instruction each thread at a time
             }
         }
 
@@ -495,6 +604,66 @@ namespace CS4380_Project4
             reg[8] += 12;
 
             return inst;
+        }
+
+        void threadSwitch()
+        {
+            int newThread = curThread;
+
+            if (blk) checkBlk();
+
+
+            for (int i = (curThread + 1) >= threads.Length ? 0 : curThread + 1 ; i < threads.Length; i++)
+            {
+                if (threads[i] == true)
+                {
+                    if (i == 0 && blk) continue;
+                    newThread = i;
+                    break;
+                }
+
+                if (i == threads.Length - 1)
+                {
+                    if (!blk)
+                    {
+                        newThread = 0;
+                        break;
+                    }
+                    i = -1;
+                }
+            }
+
+            if (newThread == curThread) return;
+
+            //Store the current thread's register values into memory
+            int threadLoc = memSize - (threadSize * curThread); // The memory location of the current thread.
+            foreach (int regVal in reg) // Loop to go through registers and store them in memory
+            {
+                byte[] bytes = BitConverter.GetBytes(regVal);
+                bytes.CopyTo(mem, threadLoc);
+                threadLoc -= 4;
+            }
+
+            curThread = newThread;
+
+            // Load the new current Thread with the register values stored in memory
+            int newThreadLoc = memSize - (threadSize * curThread);
+            for (int i = 0; i < reg.Length; i++)
+            {
+                int rval = BitConverter.ToInt32(mem, newThreadLoc);
+                reg[i] = rval;
+                newThreadLoc -= 4;
+            }
+        }
+
+        // Method to check if created threads are done so main can start running agian
+        void checkBlk()
+        {
+            for (int i = 1; i < threads.Length; i++)
+            {
+                if (threads[i] == true) return; 
+            }
+            blk = false;
         }
 
         void JMP(int[] inst)
@@ -623,6 +792,75 @@ namespace CS4380_Project4
         void DIV(int[] inst)
         {
             reg[inst[1]] = reg[inst[1]] / reg[inst[2]];
+        }
+
+        void RUN(int[] inst)
+        {
+            int threadID = -1;
+
+            for (int i = 1; i < threads.Length; i++)
+            {
+                if (threads[i] == false)
+                {
+                    threadID = i;
+                    threads[i] = true;
+                    break;
+                }
+            }
+
+            if (threadID == -1) throw new Exception("Out of threads");
+
+            int threadLoc = memSize - (threadSize * curThread); // The memory location of the current thread.
+            foreach (int regVal in reg) // Loop to go through registers and store them in memory
+            {
+                byte[] bytes = BitConverter.GetBytes(regVal);
+                bytes.CopyTo(mem, threadLoc);
+                threadLoc -= 4;
+            }
+
+            int newThreadLoc = memSize - (threadSize * threadID);
+
+            reg[8] = inst[2];
+            reg[9] = memSize - (threadSize * threadID) - threadSize;
+            reg[10] = newThreadLoc - 52;
+            reg[11] = newThreadLoc - 52;
+            reg[12] = newThreadLoc - 52;
+
+            curThread = threadID;
+        }
+
+        void END(int[] inst)
+        {
+            if (curThread == 0) return;
+
+            threads[curThread] = false;
+        }
+
+        void BLK(int[] inst)
+        {
+            blk = true;
+        }
+
+        void LCK(int[] inst)
+        {
+            int lockVal = BitConverter.ToInt32(mem, inst[1]);
+            if (lockVal != curThread && lockVal != -1)
+            {
+                reg[8] -= 12; // Here we set the PC back to the last instruction because the mutex was locked
+                return;
+            }
+
+            byte[] bytes = BitConverter.GetBytes(curThread);
+            bytes.CopyTo(mem, inst[1]);
+        }
+
+        void ULK(int[] inst)
+        {
+            int lockVal = BitConverter.ToInt32(mem, inst[1]);
+            if (lockVal != curThread) return;
+
+            byte[] bytes = BitConverter.GetBytes(-1);
+            bytes.CopyTo(mem, inst[1]);
         }
 
         void TRP(int[] inst)
